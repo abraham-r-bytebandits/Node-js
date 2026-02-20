@@ -1,25 +1,67 @@
 import db from "../config/db.js";
 
-// Insert User
+let _createdCol = null;
+const getCreatedColumn = async () => {
+  if (_createdCol) return _createdCol;
+
+  const schema = process.env.DB_NAME;
+  const candidates = ["created_at", "createdAt", "created", "createdon"];
+
+  const placeholders = candidates.map(() => "?").join(",");
+  const query = `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME IN (${placeholders})`;
+  const params = [schema, ...candidates];
+
+  try {
+    const [rows] = await db.execute(query, params);
+    if (rows.length) {
+      _createdCol = rows[0].COLUMN_NAME;
+    } else {
+      _createdCol = null;
+    }
+  } catch (err) {
+    _createdCol = null;
+  }
+
+  return _createdCol;
+};
+
 export const insertUser = async (userData) => {
   const { name, email, createdAt } = userData;
+  const createdCol = await getCreatedColumn();
 
+  if (createdCol) {
+    const sql = `INSERT INTO users (name, email, ${createdCol}) VALUES (?, ?, ?)`;
+    const [result] = await db.execute(sql, [name, email, createdAt]);
+
+    return {
+      id: result.insertId,
+      name,
+      email,
+      createdAt,
+    };
+  }
+
+  // If no created column, insert without it
   const [result] = await db.execute(
-    "INSERT INTO users (name, email, created_at) VALUES (?, ?, ?)",
-    [name, email, createdAt]
+    "INSERT INTO users (name, email) VALUES (?, ?)",
+    [name, email],
   );
 
   return {
     id: result.insertId,
     name,
     email,
-    createdAt,
   };
 };
 
 // Fetch All Users (with optional search)
 export const fetchUsers = async (search = "") => {
-  let query = "SELECT id, name, email, created_at FROM users";
+  const createdCol = await getCreatedColumn();
+  let selectCreated = createdCol
+    ? `${createdCol} AS created_at`
+    : "NULL AS created_at";
+
+  let query = `SELECT id, name, email, ${selectCreated} FROM users`;
   let values = [];
 
   if (search) {
@@ -39,10 +81,13 @@ export const fetchUsers = async (search = "") => {
 
 // Fetch Single User
 export const fetchUserById = async (id) => {
-  const [rows] = await db.execute(
-    "SELECT id, name, email, created_at FROM users WHERE id = ?",
-    [id]
-  );
+  const createdCol = await getCreatedColumn();
+  const selectCreated = createdCol
+    ? `${createdCol} AS created_at`
+    : "NULL AS created_at";
+
+  const sql = `SELECT id, name, email, ${selectCreated} FROM users WHERE id = ?`;
+  const [rows] = await db.execute(sql, [id]);
 
   if (!rows.length) return null;
 
@@ -58,11 +103,7 @@ export const fetchUserById = async (id) => {
 
 // Delete User
 export const removeUser = async (id) => {
-  const [result] = await db.execute(
-    "DELETE FROM users WHERE id = ?",
-    [id]
-  );
-
+  const [result] = await db.execute("DELETE FROM users WHERE id = ?", [id]);
   return result.affectedRows > 0;
 };
 
